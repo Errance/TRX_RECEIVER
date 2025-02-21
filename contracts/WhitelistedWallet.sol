@@ -20,9 +20,12 @@ contract WhitelistedWallet {
     // Accumulated fees for each token
     mapping(address => uint256) public accumulatedFees;
     
+    // Contract pause state
+    bool public paused;
+    
     // USDC and USDT contract addresses (Shasta testnet)
-    address private constant USDC = address(0x41A614F803B6FD780986A42C78EC9C7F77E6DED13C);
-    address private constant USDT = address(0x41A614F803B6FD780986A42C78EC9C7F77E6DED13C);
+    address private constant USDC = 0x41DB735cFCa1A03D77437b9607D35773CccF36b1;
+    address private constant USDT = 0x41DB735cFCa1A03D77437b9607D35773CccF36b1;
     
     // Events
     event Received(address indexed token, address indexed sender, uint256 amount);
@@ -30,6 +33,8 @@ contract WhitelistedWallet {
     event WhitelistUpdated(address indexed account, bool status);
     event FeesWithdrawn(address indexed token, address indexed owner, uint256 amount);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event EmergencyWithdrawn(address indexed token, address indexed to, uint256 amount);
+    event PauseStateChanged(bool paused);
     
     // Constructor
     constructor() {
@@ -58,8 +63,34 @@ contract WhitelistedWallet {
         _;
     }
     
+    modifier whenNotPaused() {
+        require(!paused, "Contract is paused");
+        _;
+    }
+
+    // Pause/Unpause contract
+    function setPaused(bool _paused) external onlyOwner {
+        paused = _paused;
+        emit PauseStateChanged(_paused);
+    }
+    
+    // Emergency withdraw all funds of a specific token
+    function emergencyWithdraw(address token) external onlyOwner {
+        uint256 amount;
+        if (token == address(0)) {
+            amount = address(this).balance;
+            require(amount > 0, "No TRX to withdraw");
+            payable(owner).transfer(amount);
+        } else {
+            amount = ITRC20(token).balanceOf(address(this));
+            require(amount > 0, "No tokens to withdraw");
+            require(ITRC20(token).transfer(owner, amount), "Transfer failed");
+        }
+        emit EmergencyWithdrawn(token, owner, amount);
+    }
+    
     // Receive TRX
-    receive() external payable {
+    receive() external payable whenNotPaused {
         emit Received(address(0), msg.sender, msg.value);
     }
     
@@ -85,13 +116,13 @@ contract WhitelistedWallet {
     }
     
     // Deposit TRC20 tokens
-    function depositTRC20(address token, uint256 amount) external onlySupportedToken(token) {
+    function depositTRC20(address token, uint256 amount) external onlySupportedToken(token) whenNotPaused {
         require(ITRC20(token).transferFrom(msg.sender, address(this), amount), "Transfer failed");
         emit Received(token, msg.sender, amount);
     }
     
     // Withdraw TRC20 tokens
-    function withdrawTRC20(address token, uint256 amount) external onlyWhitelisted onlySupportedToken(token) {
+    function withdrawTRC20(address token, uint256 amount) external onlyWhitelisted onlySupportedToken(token) whenNotPaused {
         require(token != address(0), "Use withdrawTRX for TRX");
         require(amount > 0, "Amount must be greater than 0");
         
@@ -112,7 +143,7 @@ contract WhitelistedWallet {
     }
     
     // Withdraw TRX
-    function withdrawTRX(uint256 amount) external onlyWhitelisted {
+    function withdrawTRX(uint256 amount) external onlyWhitelisted whenNotPaused {
         require(amount > 0, "Amount must be greater than 0");
         require(address(this).balance >= amount, "Insufficient contract balance");
         
